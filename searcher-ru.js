@@ -1,12 +1,3 @@
-Код: searcher-ru.js (ревизия 1)
-
-Замена штатного поисковика mdBook. Кладётся в корень репозитория alex4mailg-byte/nobackup под именем searcher-ru.js.
-
-Зачем — см. claude/OTCHET-sayt-nobackup-i-poisk-v-01.md: штатный индекс mdBook строится английским разборщиком и кириллицу не содержит вовсе.
-
-Как поставить без скачивания файла: скопировать код ниже, в GitHub нажать Add file → Create new file, вписать имя searcher-ru.js, вставить, Commit changes.
-
-javascript
 // searcher-ru.js — замена штатного book/searcher.js из mdBook v0.4.40.
 // Отличие одно: индекс строится по Unicode, поэтому работает поиск
 // по русскому тексту. Подставляется шагом сборки после `mdbook build`.
