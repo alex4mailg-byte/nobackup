@@ -22,6 +22,8 @@ jobs:
           sudo mv mdbook /usr/local/bin/
       - name: Build
         run: mdbook build
+      - name: Русский поиск
+        run: cp searcher-ru.js book/searcher.js
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
