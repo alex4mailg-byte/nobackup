@@ -1,0 +1,26 @@
+[book]
+title = "Носители"
+authors = ["Хомутов А. А."]
+language = "ru"
+src = "src"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+copy-fonts = true
+git-repository-url = ""
+site-url = "/nositeli/"
+no-section-label = true
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 2
+boost-paragraph = 1
+heading-split-level = 3
+
+[output.html.fold]
+enable = true
+level = 1
