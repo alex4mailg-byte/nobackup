@@ -20,10 +20,27 @@ jobs:
           curl -sSL -o mdbook.tar.gz https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz
           tar xzf mdbook.tar.gz
           sudo mv mdbook /usr/local/bin/
-      - name: Build
+      - name: Build большая книга
         run: mdbook build
-      - name: Русский поиск
-        run: cp searcher-ru.js book/searcher.js
+      - name: Build малая книга «Носители»
+        run: mdbook build nositeli
+      - name: Собрать малую книгу в подкаталог /nositeli/
+        run: |
+          mkdir -p book/nositeli
+          cp -r nositeli/book/. book/nositeli/
+      - name: Русский поиск в обеих книгах
+        run: |
+          cp searcher-ru.js book/searcher.js
+          cp searcher-ru.js book/nositeli/searcher.js
+      - name: Проверка сборки
+        run: |
+          test -f book/index.html
+          test -f book/nositeli/index.html
+          test -f book/CNAME
+          test ! -f book/nositeli/CNAME
+          grep -q "Unicode" book/searcher.js
+          grep -q "Unicode" book/nositeli/searcher.js
+          echo "страниц большой: $(ls book/*.html | wc -l), малой: $(ls book/nositeli/*.html | wc -l)"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
