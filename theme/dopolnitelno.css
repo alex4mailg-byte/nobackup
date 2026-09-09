@@ -1,0 +1,118 @@
+/* dopolnitelno.css · версия 01 · 8 сентября 2026
+   Оформление поверх штатной темы mdBook. Подключается через additional-css
+   в book.toml. Задача не украсить, а сделать видимым то, чем книга
+   отличается: разметку утверждений по статусу и знак сверки.
+   Метки заворачиваются в span при нарезке — см. narezka.py. */
+
+/* --- 1. Мера строки -------------------------------------------------
+   Было около ста знаков в строке, стало около семидесяти пяти.
+   На двадцати шести авторских листах это разница между чтением
+   и продиранием. В пикселях, а не в rem: в теме mdBook rem равен 10px. */
+.content main {
+    max-width: 720px;
+    margin-left: auto;
+    margin-right: auto;
+}
+.content p, .content li { line-height: 1.62; }
+.content p { margin: 0 0 1.05em; }
+
+/* --- 2. Метки статуса: Ф М Г БП -------------------------------------
+   Прежде они были набраны тем же полужирным, что и всякое выделение,
+   и в тексте не отличались от ударения. Теперь это отдельный знак,
+   и профиль книги виден при чтении, а не только в числах на титуле. */
+.metka {
+    display: inline-block;
+    /* без моноширинного: в нём нет кириллицы, подставляется мелкий запасной */
+    font-size: 0.78em;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    line-height: 1.3;
+    padding: 0.05em 0.44em;
+    margin: 0 0.08em;
+    border-radius: 0.28em;
+    vertical-align: 0.06em;
+    white-space: nowrap;
+    cursor: help;
+}
+.metka-ut {
+    font-style: normal;
+    font-weight: 400;
+    opacity: 0.75;
+    margin-left: 0.36em;
+}
+
+/* светлые темы */
+.light .metka-f,  .rust .metka-f  { background: #dfe8f2; color: #23486e; }
+.light .metka-m,  .rust .metka-m  { background: #dcebe1; color: #24583a; }
+.light .metka-g,  .rust .metka-g  { background: #f4e6d0; color: #754d16; }
+.light .metka-bp, .rust .metka-bp { background: #f0dede; color: #77292c; }
+
+/* тёмные темы: подложка светлее фона, буква яркая — иначе метка тонет */
+.navy .metka-f,  .coal .metka-f,  .ayu .metka-f  { background: #31485f; color: #bcd6f0; }
+.navy .metka-m,  .coal .metka-m,  .ayu .metka-m  { background: #2c4a38; color: #b3ddc2; }
+.navy .metka-g,  .coal .metka-g,  .ayu .metka-g  { background: #4d412c; color: #ebcb98; }
+.navy .metka-bp, .coal .metka-bp, .ayu .metka-bp { background: #513536; color: #efb6b6; }
+
+/* --- 3. Знак сверки --------------------------------------------------
+   Его в книге больше семисот. Он должен читаться как пометка на полях,
+   а не как ударение в строке. */
+.zvezda { opacity: 0.45; font-size: 0.85em; cursor: help; }
+.zvezda:hover { opacity: 0.9; }
+
+/* --- 4. Легенда в начале главы: служебная строка, а не текст книги --- */
+.content blockquote {
+    border-left-width: 2px;
+    font-size: 0.94em;
+    opacity: 0.92;
+}
+
+/* --- 5. Ссылки §N.M --------------------------------------------------
+   Их девятьсот сорок пять. Окрашенные, они превратили бы страницу
+   в частокол; подчёркивание точечное. */
+.content a[href*="#s"] {
+    text-decoration: underline dotted;
+    text-underline-offset: 0.18em;
+    text-decoration-thickness: 1px;
+}
+
+/* --- 6. Заголовки: больше воздуха сверху ----------------------------- */
+.content h2 { margin-top: 2.4em; }
+.content h3 { margin-top: 1.9em; }
+
+/* --- 7. Полоса состава главы ----------------------------------------
+   Не украшение и не изображение: ширины долей — это доли меток
+   (Ф) (М) (Г) (БП), посчитанные по тексту самой главы. Читатель видит,
+   на чём глава стоит, до того как начал её читать. Ровно то, что книга
+   обещает профилем на титуле, только по одной главе. */
+.sostav {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 6px;
+    margin: 0.2em 0 2.2em;
+    position: relative;
+}
+.sostav .dolya {
+    display: block;
+    height: 6px;
+    border-radius: 3px;
+    min-width: 6px;
+}
+.sostav-podpis {
+    position: absolute;
+    right: 0;
+    top: 12px;
+    font-size: 0.72em;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    opacity: 0.45;
+    white-space: nowrap;
+}
+.light .dolya-f,  .rust .dolya-f  { background: #7ea3cc; }
+.light .dolya-m,  .rust .dolya-m  { background: #79b193; }
+.light .dolya-g,  .rust .dolya-g  { background: #d8ac6a; }
+.light .dolya-bp, .rust .dolya-bp { background: #cc8a8c; }
+.navy .dolya-f,  .coal .dolya-f,  .ayu .dolya-f  { background: #4a7099; }
+.navy .dolya-m,  .coal .dolya-m,  .ayu .dolya-m  { background: #46815f; }
+.navy .dolya-g,  .coal .dolya-g,  .ayu .dolya-g  { background: #9c7a3f; }
+.navy .dolya-bp, .coal .dolya-bp, .ayu .dolya-bp { background: #96595b; }

@@ -12,6 +12,7 @@ git-repository-url = ""
 site-url = "/"
 cname = "nobackup.org"
 no-section-label = true
+additional-css = ["theme/dopolnitelno.css"]
 
 [output.html.search]
 enable = true

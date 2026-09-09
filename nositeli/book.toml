@@ -11,6 +11,7 @@ copy-fonts = true
 git-repository-url = ""
 site-url = "/nositeli/"
 no-section-label = true
+additional-css = ["theme/dopolnitelno.css"]
 
 [output.html.search]
 enable = true
