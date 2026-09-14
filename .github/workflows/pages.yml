@@ -1,8 +1,12 @@
 name: build-and-deploy
+
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: '40 4 * * *'      # ежедневно, 04:40 UTC — проверить, нет ли на Zenodo новой ревизии
   workflow_dispatch:
+
 permissions:
   contents: read
   pages: write
@@ -10,11 +14,91 @@ permissions:
 concurrency:
   group: pages
   cancel-in-progress: true
+
+env:
+  # Общий DOI книги: всегда указывает на самую свежую ревизию.
+  ZENODO_CONCEPT: '22336634'
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # --- Свежая ревизия с Zenodo ----------------------------------------
+      # Только по расписанию и по кнопке. При push НЕ выполняется: значит,
+      # положив черновик в kniga/kniga.md, вы получаете предпросмотр, а не
+      # опубликованную ревизию. Разделение намеренное.
+      - name: Взять свежую ревизию с Zenodo
+        run: |
+          set -eu
+          mkdir -p kniga
+          # При push книгу берём из репозитория — это ваш предпросмотр черновика.
+          # Но если её там нет (первая установка), всё равно идём на Zenodo.
+          if [ "${{ github.event_name }}" = "push" ] && [ -f kniga/kniga.md ]; then
+            echo "push, и книга в репозитории есть — Zenodo не трогаем"
+            exit 0
+          fi
+          API="https://zenodo.org/api/records/${ZENODO_CONCEPT}/versions/latest"
+          # Zenodo сейчас перегружен обходчиками и отвечает через раз — отсюда повторы.
+          curl -sSfL --retry 6 --retry-delay 20 --retry-all-errors \
+               -H 'Accept: application/json' "$API" -o zenodo.json
+          python3 - <<'PY'
+          import json, sys
+          d = json.load(open('zenodo.json'))
+          md = [f for f in d['files'] if f['key'].lower().endswith('.md')]
+          if len(md) != 1:
+              sys.exit('ОСТАНОВ: файлов .md в записи %d, ожидался ровно один' % len(md))
+          f = md[0]
+          with open('zenodo.env', 'w') as o:
+              o.write('URL=%s\n'  % f['links']['self'])
+              o.write('SIZE=%s\n' % f['size'])
+              o.write('SUM=%s\n'  % f['checksum'].replace('md5:', ''))
+          print('ревизия на Zenodo:', d['metadata'].get('version'),
+                '| файл:', f['key'], f['size'], f['checksum'])
+          PY
+          . ./zenodo.env
+          curl -sSfL --retry 6 --retry-delay 20 --retry-all-errors "$URL" -o svezhaya.md
+          # Сверка до сборки. Обрыв связи даёт усечённый файл, который
+          # нарежется без единой ошибки, — поэтому проверяем и размер, и сумму.
+          test "$(stat -c%s svezhaya.md)" = "$SIZE" \
+            || { echo "ОСТАНОВ: размер $(stat -c%s svezhaya.md), ожидался $SIZE"; exit 1; }
+          echo "$SUM  svezhaya.md" | md5sum -c -
+          mv svezhaya.md kniga/kniga.md
+          echo "книга взята с Zenodo и сверена"
+
+      - name: Что собираем
+        run: |
+          echo "повод: ${{ github.event_name }}"
+          ls -l kniga/kniga.md
+          md5sum kniga/kniga.md
+          grep -m1 -oP 'Ревизия \d+\. [^*]*' kniga/kniga.md || true
+
+      # --- Нарезка сайта из книги ------------------------------------------
+      # Папка src в репозитории не хранится: она собирается здесь. Значит,
+      # сайт не может показывать ревизию, отличную от книги, — показывать
+      # ему нечего, кроме неё.
+      - name: Нарезка
+        run: |
+          set -eu
+          rm -rf src && mkdir -p src
+          python3 kniga/narezka.py kniga/kniga.md src
+
+      - name: Проверка нарезки
+        run: |
+          set -eu
+          test -f src/SUMMARY.md
+          test -f src/CNAME
+          test -f src/title.md
+          N=$(ls src/*.md | wc -l)
+          echo "страниц нарезано: $N"
+          test "$N" -ge 30
+          R1=$(grep -oP 'Ревизия \d+' src/title.md | head -1)
+          R2=$(grep -oP 'Ревизия \d+' src/93-vyhodnye-dannye.md | head -1)
+          echo "титул: $R1 / выходные данные: $R2"
+          test "$R1" = "$R2" \
+            || { echo "ОСТАНОВ: номер ревизии на титуле и в выходных данных разный"; exit 1; }
+
       - name: Install mdBook
         run: |
           curl -sSL -o mdbook.tar.gz https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz
@@ -45,6 +129,7 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: book
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
