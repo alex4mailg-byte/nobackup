@@ -4,7 +4,13 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '40 4 * * *'      # ежедневно, 04:40 UTC — проверить, нет ли на Zenodo новой ревизии
+    # Раз в неделю, понедельник 04:40 UTC (07:40 МСК). Не чаще — и вот почему.
+    # Расписание здесь страховка на случай «опубликовал и забыл», а не
+    # основной путь: обычно автор жмёт Run workflow сразу после публикации.
+    # Книга меняется раз в месяц; опрашивать её ежедневно значит тридцать
+    # раз спросить об одном и том же. И отдельно: Zenodo сейчас лежит именно
+    # под автоматическим трафиком — ежедневный опрос был бы вкладом в ту же беду.
+    - cron: '40 4 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -16,33 +22,49 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Общий DOI книги: всегда указывает на самую свежую ревизию.
   ZENODO_CONCEPT: '22336634'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      propusk: ${{ steps.zenodo.outputs.propusk }}
     steps:
       - uses: actions/checkout@v4
 
-      # --- Свежая ревизия с Zenodo ----------------------------------------
-      # Только по расписанию и по кнопке. При push НЕ выполняется: значит,
-      # положив черновик в kniga/kniga.md, вы получаете предпросмотр, а не
-      # опубликованную ревизию. Разделение намеренное.
+      # --- Свежая ревизия с Zenodo -----------------------------------------
+      # Три случая разведены намеренно, потому что они разного рода:
+      #   Zenodo не ответил, прогон ночной  → тихий пропуск, сборки нет,
+      #       письма нет. Это не ошибка в книге, а отсутствие повода пересобрать.
+      #   Zenodo не ответил, нажата кнопка  → падение. Вы просили собрать сейчас.
+      #   Zenodo ответил, сумма не сошлась  → падение всегда. Это порча.
+      # Тревога, срабатывающая впустую, хуже отсутствующей: к третьему письму
+      # её перестают открывать, и настоящая порча проходит незамеченной.
       - name: Взять свежую ревизию с Zenodo
+        id: zenodo
         run: |
           set -eu
           mkdir -p kniga
-          # При push книгу берём из репозитория — это ваш предпросмотр черновика.
-          # Но если её там нет (первая установка), всё равно идём на Zenodo.
           if [ "${{ github.event_name }}" = "push" ] && [ -f kniga/kniga.md ]; then
             echo "push, и книга в репозитории есть — Zenodo не трогаем"
             exit 0
           fi
+
+          nedostupen() {
+            if [ "${{ github.event_name }}" = "schedule" ]; then
+              echo "::notice::Zenodo недоступен. Ночной прогон пропущен, сайт остаётся прежним."
+              echo "propusk=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::Zenodo недоступен, а прогон запрошен вручную. $1"
+            exit 1
+          }
+
           API="https://zenodo.org/api/records/${ZENODO_CONCEPT}/versions/latest"
-          # Zenodo сейчас перегружен обходчиками и отвечает через раз — отсюда повторы.
-          curl -sSfL --retry 6 --retry-delay 20 --retry-all-errors \
-               -H 'Accept: application/json' "$API" -o zenodo.json
+          curl -sSfL --retry 5 --retry-delay 15 --retry-all-errors --retry-max-time 120 \
+               -H 'Accept: application/json' "$API" -o zenodo.json \
+            || nedostupen "Не отвечает API записи."
+
           python3 - <<'PY'
           import json, sys
           d = json.load(open('zenodo.json'))
@@ -57,34 +79,41 @@ jobs:
           print('ревизия на Zenodo:', d['metadata'].get('version'),
                 '| файл:', f['key'], f['size'], f['checksum'])
           PY
+
           . ./zenodo.env
-          curl -sSfL --retry 6 --retry-delay 20 --retry-all-errors "$URL" -o svezhaya.md
-          # Сверка до сборки. Обрыв связи даёт усечённый файл, который
-          # нарежется без единой ошибки, — поэтому проверяем и размер, и сумму.
-          test "$(stat -c%s svezhaya.md)" = "$SIZE" \
-            || { echo "ОСТАНОВ: размер $(stat -c%s svezhaya.md), ожидался $SIZE"; exit 1; }
-          echo "$SUM  svezhaya.md" | md5sum -c -
+          curl -sSfL --retry 5 --retry-delay 15 --retry-all-errors --retry-max-time 180 \
+               "$URL" -o svezhaya.md \
+            || nedostupen "Запись прочитана, но файл не скачался."
+
+          # Сверка до сборки. Обрыв связи даёт усечённый файл, который нарежется
+          # без единой ошибки. Здесь падаем ВСЕГДА, при любом поводе: это порча,
+          # а не недоступность.
+          if [ "$(stat -c%s svezhaya.md)" != "$SIZE" ]; then
+            echo "::error::Размер $(stat -c%s svezhaya.md), ожидался $SIZE. Файл усечён."
+            exit 1
+          fi
+          echo "$SUM  svezhaya.md" | md5sum -c - \
+            || { echo "::error::Контрольная сумма не сошлась. Файл испорчен."; exit 1; }
+
           mv svezhaya.md kniga/kniga.md
           echo "книга взята с Zenodo и сверена"
 
       - name: Что собираем
+        if: steps.zenodo.outputs.propusk != 'true'
         run: |
           echo "повод: ${{ github.event_name }}"
-          ls -l kniga/kniga.md
-          md5sum kniga/kniga.md
+          ls -l kniga/kniga.md; md5sum kniga/kniga.md
           grep -m1 -oP 'Ревизия \d+\. [^*]*' kniga/kniga.md || true
 
-      # --- Нарезка сайта из книги ------------------------------------------
-      # Папка src в репозитории не хранится: она собирается здесь. Значит,
-      # сайт не может показывать ревизию, отличную от книги, — показывать
-      # ему нечего, кроме неё.
       - name: Нарезка
+        if: steps.zenodo.outputs.propusk != 'true'
         run: |
           set -eu
           rm -rf src && mkdir -p src
           python3 kniga/narezka.py kniga/kniga.md src
 
       - name: Проверка нарезки
+        if: steps.zenodo.outputs.propusk != 'true'
         run: |
           set -eu
           test -f src/SUMMARY.md
@@ -97,26 +126,32 @@ jobs:
           R2=$(grep -oP 'Ревизия \d+' src/93-vyhodnye-dannye.md | head -1)
           echo "титул: $R1 / выходные данные: $R2"
           test "$R1" = "$R2" \
-            || { echo "ОСТАНОВ: номер ревизии на титуле и в выходных данных разный"; exit 1; }
+            || { echo "::error::Номер ревизии на титуле и в выходных данных разный"; exit 1; }
 
       - name: Install mdBook
+        if: steps.zenodo.outputs.propusk != 'true'
         run: |
           curl -sSL -o mdbook.tar.gz https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz
           tar xzf mdbook.tar.gz
           sudo mv mdbook /usr/local/bin/
       - name: Build большая книга
+        if: steps.zenodo.outputs.propusk != 'true'
         run: mdbook build
       - name: Build малая книга «Носители»
+        if: steps.zenodo.outputs.propusk != 'true'
         run: mdbook build nositeli
       - name: Собрать малую книгу в подкаталог /nositeli/
+        if: steps.zenodo.outputs.propusk != 'true'
         run: |
           mkdir -p book/nositeli
           cp -r nositeli/book/. book/nositeli/
       - name: Русский поиск в обеих книгах
+        if: steps.zenodo.outputs.propusk != 'true'
         run: |
           cp searcher-ru.js book/searcher.js
           cp searcher-ru.js book/nositeli/searcher.js
       - name: Проверка сборки
+        if: steps.zenodo.outputs.propusk != 'true'
         run: |
           test -f book/index.html
           test -f book/nositeli/index.html
@@ -126,12 +161,15 @@ jobs:
           grep -q "Unicode" book/nositeli/searcher.js
           echo "страниц большой: $(ls book/*.html | wc -l), малой: $(ls book/nositeli/*.html | wc -l)"
       - uses: actions/configure-pages@v5
+        if: steps.zenodo.outputs.propusk != 'true'
       - uses: actions/upload-pages-artifact@v3
+        if: steps.zenodo.outputs.propusk != 'true'
         with:
           path: book
 
   deploy:
     needs: build
+    if: needs.build.outputs.propusk != 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
