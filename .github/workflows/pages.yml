@@ -225,6 +225,123 @@ jobs:
                   print(put, '→ <title>%s</title> | canonical %s' % (zagolovok, adres))
           PY
 
+      # --- Своё описание каждой странице -----------------------------------
+      # Было: все страницы несли одно описание — аннотацию книги целиком из
+      # theme/head.hbs. Глава «Порог Эйгена» представлялась поисковику теми же
+      # словами, что список литературы. Это и упущенная возможность (описание —
+      # второй по силе сигнал о предмете страницы после заголовка), и слабый
+      # минус: одинаковые описания на сайте считаются признаком небрежности.
+      #
+      # Здесь ничего не сочиняется. Описание собирается из СОБСТВЕННОГО текста
+      # страницы: её заголовок плюс первые её же фразы. Поэтому нет ни таблицы
+      # из двадцати восьми строк, ни второго места, которое надо не забыть при
+      # правке книги, — и сама книга не трогается вовсе. Заголовки глав — текст
+      # книги, а книга заморожена; менять их можно только новой ревизией.
+      #
+      # Титулы обеих книг пропускаются: у них описание своё, из head.hbs.
+      - name: Своё описание каждой странице
+        if: steps.zenodo.outputs.propusk != 'true'
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import os, re, sys, html
+
+          PREDEL    = 230   # знаков в описании, с запасом на усечение в выдаче
+          MINIMUM   = 90    # короче — оставляем запасное описание из head.hbs
+          KUSOK_MIN = 40    # абзац короче считается подписью, а не текстом
+          NABRANO   = 150   # набрали столько — следующий абзац уже не берём
+          PROPUSK   = {'404.html', 'print.html', 'toc.html',
+                       'index.html', 'title.html'}
+
+          def bez_tegov(s):
+              s = re.sub(r'<[^>]+>', '', s)
+              return re.sub(r'\s+', ' ', html.unescape(s)).strip()
+
+          def vytyazhka(t):
+              i = t.find('<main')
+              if i < 0:
+                  return None, None
+              telo = t[i:t.find('</main>', i)] if '</main>' in t[i:] else t[i:]
+              m = re.search(r'<h1[^>]*>(.*?)</h1>', telo, re.S)
+              zagolovok = bez_tegov(m.group(1)) if m else ''
+              if m:
+                  telo = telo[m.end():]
+              # Полоса состава главы — подпись к рисунку, а не текст.
+              telo = re.sub(r'<div class="sostav".*?</div>', ' ', telo, flags=re.S)
+              # Эпиграф с маркерами один на всю часть — он не про эту главу.
+              telo = re.sub(r'<blockquote>(?:(?!</blockquote>).)*?Маркеры на полях'
+                            r'(?:(?!</blockquote>).)*?</blockquote>', ' ', telo, flags=re.S)
+              # Значки статуса — буквы Ф, М, Г, БП посреди фразы.
+              telo = re.sub(r'<span class="metka[^"]*"[^>]*>.*?</span>', ' ', telo, flags=re.S)
+              telo = re.sub(r'<span class="zvezda"[^>]*>.*?</span>', ' ', telo, flags=re.S)
+              kuski = []
+              for p in re.findall(r'<p[^>]*>(.*?)</p>', telo, re.S):
+                  s = bez_tegov(p)
+                  if len(s) < KUSOK_MIN:
+                      continue
+                  kuski.append(s)
+                  if sum(len(k) for k in kuski) >= NABRANO:
+                      break
+              return zagolovok, ' '.join(kuski)
+
+          def obrezat(s, predel):
+              if len(s) <= predel:
+                  return s
+              kusok = s[:predel]
+              for znak in ('. ', '? ', '! '):
+                  j = kusok.rfind(znak)
+                  if j > predel * 0.5:
+                      return kusok[:j + 1].strip()
+              j = kusok.rfind(' ')
+              return (kusok[:j] if j > 0 else kusok).rstrip(' ,;:—-') + '…'
+
+          def postavit(t, imya, znachenie):
+              rod = 'property' if imya.startswith('og:') else 'name'
+              obraz = re.compile(r'(<meta %s="%s" content=")[^"]*(">)' % (rod, re.escape(imya)))
+              v = znachenie.replace('&', '&amp;').replace('"', '&quot;')
+              return obraz.subn(lambda m: m.group(1) + v + m.group(2), t, count=1)
+
+          vsego = pravleno = propushcheno = korotkih = 0
+          for katalog, _, fayly in os.walk('book'):
+              for f in sorted(fayly):
+                  if not f.endswith('.html'):
+                      continue
+                  vsego += 1
+                  if f in PROPUSK:
+                      propushcheno += 1
+                      continue
+                  put = os.path.join(katalog, f)
+                  t = open(put, encoding='utf-8').read()
+                  zagolovok, telo = vytyazhka(t)
+                  if telo is None:
+                      sys.exit('ОСТАНОВ: в %s нет <main>' % put)
+                  if len(telo) < MINIMUM:
+                      korotkih += 1
+                      print('  коротко, оставлено прежнее описание:', put)
+                      continue
+                  nachalo = zagolovok + '. ' if zagolovok and not telo.startswith(zagolovok) else ''
+                  opisanie = obrezat(nachalo + telo, PREDEL)
+                  t, n1 = postavit(t, 'description', opisanie)
+                  t, n2 = postavit(t, 'og:description', opisanie)
+                  t, n3 = postavit(t, 'og:title', zagolovok or opisanie[:60])
+                  if not (n1 and n2 and n3):
+                      sys.exit('ОСТАНОВ: в %s не нашлось метатегов (%d/%d/%d)' % (put, n1, n2, n3))
+                  open(put, 'w', encoding='utf-8').write(t)
+                  # Проверяется результат, а не код возврата.
+                  p = open(put, encoding='utf-8').read()
+                  ozhidaem = opisanie.replace('&', '&amp;').replace('"', '&quot;')
+                  if ('content="' + ozhidaem + '"') not in p:
+                      sys.exit('ОСТАНОВ: описание не записано в %s' % put)
+                  pravleno += 1
+                  print('%-46s %s' % (os.path.relpath(put, 'book'), opisanie))
+
+          print('страниц всего: %d, описаний поставлено: %d, титулов пропущено: %d, '
+                'слишком коротких: %d' % (vsego, pravleno, propushcheno, korotkih))
+          if pravleno < 40:
+              raise SystemExit('ОСТАНОВ: описаний поставлено %d, ожидалось не меньше сорока'
+                               % pravleno)
+          PY
+
       - name: Карта сайта и robots.txt
         if: steps.zenodo.outputs.propusk != 'true'
         run: |
@@ -303,6 +420,12 @@ jobs:
           ! grep -q '<loc>https://nobackup.org/nositeli/title.html</loc>' book/sitemap.xml
           # Метки поисковых панелей — не страницы книги, в карте их быть не должно.
           ! grep -qE '<loc>[^<]*/(yandex_|google)[^<]*</loc>' book/sitemap.xml
+          # Описания перестали быть одинаковыми — утверждение о содержании,
+          # а не о наличии файла.
+          D1=$(grep -m1 -o '<meta name="description" content="[^"]*"' book/gl-01.html)
+          D2=$(grep -m1 -o '<meta name="description" content="[^"]*"' book/gl-02.html)
+          test "$D1" != "$D2" \
+            || { echo "::error::описания глав 1 и 2 совпали — шаг описаний не сработал"; exit 1; }
           echo "страниц большой: $(ls book/*.html | wc -l), малой: $(ls book/nositeli/*.html | wc -l)"
       - uses: actions/configure-pages@v5
         if: steps.zenodo.outputs.propusk != 'true'
