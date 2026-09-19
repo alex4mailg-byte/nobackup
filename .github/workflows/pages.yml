@@ -263,6 +263,27 @@ jobs:
               raise SystemExit('ОСТАНОВ: адресов %d, ожидалось не меньше сорока' % len(adresa))
           PY
 
+      # Яндекс.Вебмастер и Google Search Console просят положить в корень сайта
+      # файл со своей меткой. Каталог book/ собирается заново при каждом прогоне,
+      # а src/ вычищается нарезчиком, — поэтому файлы лежат в корне репозитория
+      # и копируются сюда. Правило общее, по образцу имени: завести новую панель
+      # значит положить файл в репозиторий, рабочий процесс править не надо.
+      # Шаг стоит ПОСЛЕ карты сайта намеренно: это не страница книги, и в карте
+      # ей не место.
+      - name: Файлы подтверждения прав в поисковых панелях
+        if: steps.zenodo.outputs.propusk != 'true'
+        run: |
+          set -eu
+          n=0
+          for f in yandex_*.html google*.html; do
+            [ -e "$f" ] || continue
+            cp "$f" book/
+            test -f "book/$f" || { echo "::error::не скопирован $f"; exit 1; }
+            echo "подтверждение: $f"
+            n=$((n+1))
+          done
+          echo "файлов подтверждения: $n"
+
       - name: Проверка сборки
         if: steps.zenodo.outputs.propusk != 'true'
         run: |
@@ -280,6 +301,8 @@ jobs:
           ! grep -q 'rel="canonical"' book/gl-01.html
           ! grep -q '<loc>https://nobackup.org/title.html</loc>' book/sitemap.xml
           ! grep -q '<loc>https://nobackup.org/nositeli/title.html</loc>' book/sitemap.xml
+          # Метки поисковых панелей — не страницы книги, в карте их быть не должно.
+          ! grep -qE '<loc>[^<]*/(yandex_|google)[^<]*</loc>' book/sitemap.xml
           echo "страниц большой: $(ls book/*.html | wc -l), малой: $(ls book/nositeli/*.html | wc -l)"
       - uses: actions/configure-pages@v5
         if: steps.zenodo.outputs.propusk != 'true'
