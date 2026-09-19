@@ -150,6 +150,42 @@ jobs:
         run: |
           cp searcher-ru.js book/searcher.js
           cp searcher-ru.js book/nositeli/searcher.js
+      - name: Карта сайта и robots.txt
+        if: steps.zenodo.outputs.propusk != 'true'
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import os, datetime
+          BAZA = 'https://nobackup.org'
+          segodnya = datetime.date.today().isoformat()
+          PROPUSK = {'404.html', 'print.html', 'toc.html'}
+          adresa = []
+          for koren, _, fayly in os.walk('book'):
+              for f in fayly:
+                  if not f.endswith('.html') or f in PROPUSK:
+                      continue
+                  p = os.path.relpath(os.path.join(koren, f), 'book').replace(os.sep, '/')
+                  if p == 'index.html':
+                      p = ''
+                  elif p.endswith('/index.html'):
+                      p = p[:-len('index.html')]
+                  adresa.append(BAZA + '/' + p)
+          adresa = sorted(set(adresa))
+          with open('book/sitemap.xml', 'w', encoding='utf-8') as o:
+              o.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+              o.write('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n')
+              for a in adresa:
+                  o.write('  <url><loc>%s</loc><lastmod>%s</lastmod></url>\n' % (a, segodnya))
+              o.write('</urlset>\n')
+          open('book/robots.txt', 'w', encoding='utf-8').write(
+              'User-agent: *\nAllow: /\n\nSitemap: %s/sitemap.xml\n' % BAZA)
+          print('адресов в карте сайта:', len(adresa))
+          # Порог, а не украшение: если mdBook однажды соберёт полкниги,
+          # карта сайта сообщит об этом падением, а не тихо обеднеет.
+          if len(adresa) < 40:
+              raise SystemExit('ОСТАНОВ: адресов %d, ожидалось не меньше сорока' % len(adresa))
+          PY
+
       - name: Проверка сборки
         if: steps.zenodo.outputs.propusk != 'true'
         run: |
@@ -157,6 +193,8 @@ jobs:
           test -f book/nositeli/index.html
           test -f book/CNAME
           test ! -f book/nositeli/CNAME
+          test -f book/sitemap.xml
+          test -f book/robots.txt
           grep -q "Unicode" book/searcher.js
           grep -q "Unicode" book/nositeli/searcher.js
           echo "страниц большой: $(ls book/*.html | wc -l), малой: $(ls book/nositeli/*.html | wc -l)"
