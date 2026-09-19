@@ -252,6 +252,13 @@ jobs:
           NABRANO   = 150   # набрали столько — следующий абзац уже не берём
           PROPUSK   = {'404.html', 'print.html', 'toc.html',
                        'index.html', 'title.html'}
+          # Главы книги часто открываются оглядкой на предыдущую. Как первая
+          # фраза в выдаче это негодно: страница представляется чужим номером.
+          # Правило опирается на замер — таких описаний было двенадцать из
+          # пятидесяти четырёх, — а не на предположение.
+          OGLYADKA  = re.compile(r'^(Глава \d+|В главе \d+|Предыдущая глава|'
+                                 r'Предыдущие главы|Прошлая глава)\b')
+          MAKS_SNYAT = 2    # больше двух абзацев подряд не пропускаем
 
           def bez_tegov(s):
               s = re.sub(r'<[^>]+>', '', s)
@@ -274,15 +281,28 @@ jobs:
               # Значки статуса — буквы Ф, М, Г, БП посреди фразы.
               telo = re.sub(r'<span class="metka[^"]*"[^>]*>.*?</span>', ' ', telo, flags=re.S)
               telo = re.sub(r'<span class="zvezda"[^>]*>.*?</span>', ' ', telo, flags=re.S)
-              kuski = []
-              for p in re.findall(r'<p[^>]*>(.*?)</p>', telo, re.S):
-                  s = bez_tegov(p)
-                  if len(s) < KUSOK_MIN:
-                      continue
-                  kuski.append(s)
-                  if sum(len(k) for k in kuski) >= NABRANO:
-                      break
-              return zagolovok, ' '.join(kuski)
+
+              abzacy = [bez_tegov(p) for p in re.findall(r'<p[^>]*>(.*?)</p>', telo, re.S)]
+              abzacy = [s for s in abzacy if len(s) >= KUSOK_MIN]
+
+              def sobrat(spisok):
+                  kuski = []
+                  for s in spisok:
+                      kuski.append(s)
+                      if sum(len(k) for k in kuski) >= NABRANO:
+                          break
+                  return ' '.join(kuski)
+
+              ostatok = abzacy
+              snyato = 0
+              while ostatok and snyato < MAKS_SNYAT and OGLYADKA.match(ostatok[0]):
+                  ostatok = ostatok[1:]
+                  snyato += 1
+              # Снимаем оглядку только если после неё осталось из чего собрать.
+              if snyato and len(sobrat(ostatok)) < MINIMUM:
+                  ostatok = abzacy
+                  snyato = 0
+              return zagolovok, sobrat(ostatok)
 
           def obrezat(s, predel):
               if len(s) <= predel:
@@ -301,17 +321,31 @@ jobs:
               v = znachenie.replace('&', '&amp;').replace('"', '&quot;')
               return obraz.subn(lambda m: m.group(1) + v + m.group(2), t, count=1)
 
-          vsego = pravleno = propushcheno = korotkih = 0
+          vsego = pravleno = propushcheno = korotkih = pustyh = 0
           for katalog, _, fayly in os.walk('book'):
               for f in sorted(fayly):
                   if not f.endswith('.html'):
                       continue
                   vsego += 1
+                  put = os.path.join(katalog, f)
+                  t = open(put, encoding='utf-8').read()
+
+                  # mdBook ставит свой <meta name="description"> из book.toml,
+                  # а там пусто. Выходило по два тега на странице, второй
+                  # пустой, и какой из них возьмёт поисковик — его дело.
+                  # Пустые снимаются ВЕЗДЕ и ДО подстановки: иначе порядок
+                  # тегов начинает решать, в который мы попадём.
+                  t, n_pust = re.subn(r'\s*<meta name="description" content="\s*">', '', t)
+                  if n_pust:
+                      pustyh += n_pust
+                      open(put, 'w', encoding='utf-8').write(t)
+                  if t.count('name="description"') > 1:
+                      sys.exit('ОСТАНОВ: в %s осталось %d тегов description'
+                               % (put, t.count('name="description"')))
+
                   if f in PROPUSK:
                       propushcheno += 1
                       continue
-                  put = os.path.join(katalog, f)
-                  t = open(put, encoding='utf-8').read()
                   zagolovok, telo = vytyazhka(t)
                   if telo is None:
                       sys.exit('ОСТАНОВ: в %s нет <main>' % put)
@@ -335,8 +369,9 @@ jobs:
                   pravleno += 1
                   print('%-46s %s' % (os.path.relpath(put, 'book'), opisanie))
 
-          print('страниц всего: %d, описаний поставлено: %d, титулов пропущено: %d, '
-                'слишком коротких: %d' % (vsego, pravleno, propushcheno, korotkih))
+          print('страниц всего: %d, описаний поставлено: %d, пропущено служебных: %d, '
+                'слишком коротких: %d, снято пустых тегов: %d'
+                % (vsego, pravleno, propushcheno, korotkih, pustyh))
           if pravleno < 40:
               raise SystemExit('ОСТАНОВ: описаний поставлено %d, ожидалось не меньше сорока'
                                % pravleno)
@@ -426,6 +461,12 @@ jobs:
           D2=$(grep -m1 -o '<meta name="description" content="[^"]*"' book/gl-02.html)
           test "$D1" != "$D2" \
             || { echo "::error::описания глав 1 и 2 совпали — шаг описаний не сработал"; exit 1; }
+          # Тег description ровно один на странице, пустого дубля от mdBook нет.
+          for F in book/index.html book/gl-01.html book/92-literatura.html book/nositeli/index.html; do
+            N=$(grep -c 'name="description"' "$F")
+            test "$N" = "1" || { echo "::error::в $F тегов description: $N"; exit 1; }
+          done
+          ! grep -rq '<meta name="description" content="">' book/
           echo "страниц большой: $(ls book/*.html | wc -l), малой: $(ls book/nositeli/*.html | wc -l)"
       - uses: actions/configure-pages@v5
         if: steps.zenodo.outputs.propusk != 'true'
