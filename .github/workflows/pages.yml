@@ -150,6 +150,81 @@ jobs:
         run: |
           cp searcher-ru.js book/searcher.js
           cp searcher-ru.js book/nositeli/searcher.js
+
+      # --- Титульная страница: заголовок вкладки и канонический адрес -------
+      # Две беды, обе видны только поисковику и обе только на титуле.
+      #
+      # Первая. mdBook складывает <title> из имени главы и имени книги. На
+      # титульной странице они совпадают, и выходит «Резервной копии нет —
+      # Резервной копии нет». Именно эту строку поиск показывает заголовком
+      # результата. Заранее заданного названия здесь НЕ подставляется: оно
+      # завелось бы вторым местом, которое надо не забыть при переименовании
+      # книги, — а переименование уже случалось. Берутся первые два
+      # предложения описания той же страницы: описание правится в head.hbs,
+      # там же, где автор правит такие слова.
+      #
+      # Вторая. Титул отдаётся по двум адресам, /title.html и /, с одним и тем
+      # же содержимым. Для поиска это дубль. Ставится canonical — но ТОЛЬКО на
+      # эти две страницы. Общий canonical в head.hbs уже был однажды поставлен
+      # и указывал все страницы сайта на главную, то есть прямо запрещал
+      # индексировать книгу. Повторять этого нельзя.
+      - name: Заголовок вкладки и канонический адрес титула
+        if: steps.zenodo.outputs.propusk != 'true'
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import os, re, sys
+
+          BAZA = 'https://nobackup.org'
+          PARY = [('book',          BAZA + '/'),
+                  ('book/nositeli', BAZA + '/nositeli/')]
+
+          for katalog, adres in PARY:
+              zagolovok = None
+              for imya in ('index.html', 'title.html'):
+                  put = os.path.join(katalog, imya)
+                  if not os.path.exists(put):
+                      sys.exit('ОСТАНОВ: нет %s' % put)
+                  t = open(put, encoding='utf-8').read()
+
+                  if zagolovok is None:
+                      m = re.search(r'<title>(.*?)</title>', t, re.S)
+                      if not m:
+                          sys.exit('ОСТАНОВ: в %s нет <title>' % put)
+                      celikom = m.group(1).strip()
+                      chasti = [c.strip() for c in celikom.split(' - ')]
+                      if len(chasti) == 2 and chasti[0].lower() == chasti[1].lower():
+                          d = re.search(r'<meta name="description" content="([^"]*)"', t)
+                          kuski = [k.strip() for k in (d.group(1) if d else '').split('.')
+                                   if k.strip()]
+                          novyy = '. '.join(kuski[:2])
+                          if not (10 <= len(novyy) <= 70):
+                              novyy = chasti[1]
+                              print('::notice::описание в заголовок не годится, взято «%s»'
+                                    % novyy)
+                          zagolovok = novyy
+                      else:
+                          zagolovok = celikom
+                          print('удвоения нет, заголовок оставлен:', celikom)
+
+                  t = re.sub(r'<title>.*?</title>', '<title>%s</title>' % zagolovok,
+                             t, count=1, flags=re.S)
+                  if 'rel="canonical"' not in t:
+                      t = t.replace('</title>',
+                                    '</title>\n    <link rel="canonical" href="%s">' % adres,
+                                    1)
+                  open(put, 'w', encoding='utf-8').write(t)
+
+                  # Проверяется результат, а не код возврата.
+                  p = open(put, encoding='utf-8').read()
+                  if '<title>%s</title>' % zagolovok not in p:
+                      sys.exit('ОСТАНОВ: заголовок не записан в %s' % put)
+                  if p.count('rel="canonical"') != 1:
+                      sys.exit('ОСТАНОВ: canonical в %s встречается %d раз'
+                               % (put, p.count('rel="canonical"')))
+                  print(put, '→ <title>%s</title> | canonical %s' % (zagolovok, adres))
+          PY
+
       - name: Карта сайта и robots.txt
         if: steps.zenodo.outputs.propusk != 'true'
         run: |
@@ -158,7 +233,9 @@ jobs:
           import os, datetime
           BAZA = 'https://nobackup.org'
           segodnya = datetime.date.today().isoformat()
-          PROPUSK = {'404.html', 'print.html', 'toc.html'}
+          # title.html — тот же титул, что и «/». В карту идёт один адрес из двух,
+          # тот, на который указывает canonical.
+          PROPUSK = {'404.html', 'print.html', 'toc.html', 'title.html'}
           adresa = []
           for koren, _, fayly in os.walk('book'):
               for f in fayly:
@@ -197,6 +274,12 @@ jobs:
           test -f book/robots.txt
           grep -q "Unicode" book/searcher.js
           grep -q "Unicode" book/nositeli/searcher.js
+          # Титул: canonical стоит, удвоенного заголовка нет, дубля в карте нет.
+          grep -q 'rel="canonical"' book/index.html
+          grep -q 'rel="canonical"' book/nositeli/index.html
+          ! grep -q 'rel="canonical"' book/gl-01.html
+          ! grep -q '<loc>https://nobackup.org/title.html</loc>' book/sitemap.xml
+          ! grep -q '<loc>https://nobackup.org/nositeli/title.html</loc>' book/sitemap.xml
           echo "страниц большой: $(ls book/*.html | wc -l), малой: $(ls book/nositeli/*.html | wc -l)"
       - uses: actions/configure-pages@v5
         if: steps.zenodo.outputs.propusk != 'true'
