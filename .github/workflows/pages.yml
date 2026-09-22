@@ -151,6 +151,10 @@ jobs:
           cp searcher-ru.js book/searcher.js
           cp searcher-ru.js book/nositeli/searcher.js
 
+      - name: Главная страница книги
+        if: steps.zenodo.outputs.propusk != 'true'
+        run: python3 landing/build.py
+
       # --- Титульная страница: заголовок вкладки и канонический адрес -------
       # Две беды, обе видны только поисковику и обе только на титуле.
       #
